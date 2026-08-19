@@ -1,0 +1,36 @@
+# .ralph/command-policy — Ralph command policy (codebase-memory-mcp fork)
+#
+# Run infrastructure: lives only on ralph-base/linear run branches; never
+# merged to main or any PR branch.
+
+# ─────────────────────────────────────────────────────────────────────
+# [gates] — REQUIRED. One script owns the quality bar and takes the tier as
+# an argument: basic compiles, full adds the ASan test suite + linters,
+# final adds the security audit.
+
+[gates]
+basic | ./scripts/dev/gate.sh basic
+full  | ./scripts/dev/gate.sh full
+final | ./scripts/dev/gate.sh final
+
+[rewrite]
+
+# ─────────────────────────────────────────────────────────────────────
+# [deny] — empty on purpose. The plan itself constrains the dangerous
+# surfaces (install.sh only under a sandbox HOME; upstream PRs draft-only).
+# Deny matching is frozen for the whole run, so a too-broad pattern here
+# could block the legitimate AGL-8 / AGL-11 verification work.
+
+[deny]
+
+# ─────────────────────────────────────────────────────────────────────
+# [wrap] — route the sub-gate commands through the gate runner so partial
+# runs leave the same breadcrumbs as a full tier.
+
+[wrap]
+scripts/test.sh | unit
+./scripts/test.sh | unit
+scripts/lint.sh | lint
+./scripts/lint.sh | lint
+
+[protect]
