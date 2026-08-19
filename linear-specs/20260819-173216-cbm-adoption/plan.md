@@ -27,7 +27,13 @@ Per task:
    live ticket — read those before building). Implement the minimum change that
    satisfies it.
 2. Run the basic gate. Mark `[x]` only after it exits 0 — never around a red gate.
-3. `git add <exact paths> && git commit -s -m "<type>(<scope>): <desc> (AGL-N T###)"`.
+3. `git add <exact paths> && git commit -s --no-verify -m "<type>(<scope>): <desc> (AGL-N T###)"`.
+   `--no-verify` is deliberate and mandatory inside this run: the repo's
+   pre-commit hook re-runs lint + the security audit + the full test suite on
+   every commit (~15 min each). That bar is not lowered — it is owned by the
+   gate tiers instead (basic per task, full at every tranche close, final where
+   a task says so) plus upstream CI on every PR. Never use `--no-verify`
+   outside this run's worktree.
    The `-s` is mandatory: this repo enforces the DCO — every commit needs a
    `Signed-off-by` trailer matching the author (Brian McNaboe
    <bmcnaboe@gmail.com>). That trailer is required and is not an agent footer;
@@ -42,6 +48,10 @@ Fork-specific rules:
 
 - The first basic gate compiles ~1.2 GB of vendored grammar sources — long is
   normal, not a hang. Later builds are incremental.
+- Verification cadence: commits are cheap (`--no-verify`, see above); the
+  expensive checks run only where they decide something — the full gate at each
+  tranche close, the final gate at T023, upstream CI on the PR branches. Do not
+  re-run full/final gates per task.
 - Upstream conduct: all GitHub posts go through `gh` under the user's account
   (approved). PRs are always opened `--draft` and never marked ready by the loop.
   Never push to the `upstream` remote, never edit upstream repo settings, never
