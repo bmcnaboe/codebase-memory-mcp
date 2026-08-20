@@ -110,7 +110,7 @@ before any code tranche.
 
 ### Tranche C — Vue `<script setup>` indexing, spec-first (AGL-6)
 
-- [ ] T015 [AGL-6] Claim: move AGL-6 to In Progress, assignee me, start comment
+- [x] T015 [AGL-6] Claim: move AGL-6 to In Progress, assignee me, start comment
 - [ ] T016 [AGL-6] Spec first (Spec Kit ticket): write `linear-specs/20260819-173216-cbm-adoption/agl-6-design.md` — walker-set generalization, `ts_parser_set_included_ranges` file-coordinate parsing, `lang="ts"` sniffing, Svelte parity, test plan, out-of-scope (template→handler edges); post a summary comment on AGL-6
 - [ ] T017 [AGL-6] Generalize the embedded-script seam in internal/cbm/extract_imports.c from imports-only to the full walker set (defs, calls, …), parsing with included ranges over the original source, per the design note
 - [ ] T018 [AGL-6] Sniff `lang="ts"` on `script_element` → `CBM_LANG_TYPESCRIPT`; apply the same generalization to Svelte's identical-shaped spec
