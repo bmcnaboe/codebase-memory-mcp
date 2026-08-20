@@ -132,7 +132,7 @@ before any code tranche.
 
 ### Tranche F — Install + verify (AGL-11)
 
-- [ ] T028 [AGL-11] Claim: move AGL-11 to In Progress, assignee me, start comment
+- [x] T028 [AGL-11] Claim: move AGL-11 to In Progress, assignee me, start comment
 - [ ] T029 [AGL-11] Build and install from `origin/main`: `scripts/build.sh`; put `build/c/codebase-memory-mcp` on PATH; run `codebase-memory-mcp install --clients=claude,codex` (the one sanctioned real-config install — it edits this machine's Claude/Codex config as intended; later loop iterations may begin receiving cbm hook context, which is expected)
 - [ ] T030 [AGL-11] Index the AGL-5 baseline monorepo (repo path recorded in /Users/bmcnaboe/development/context-layer-bench/micro/cbm.jsonl) and verify AGL-5 (10/10 non-empty at default deadline; forced miss logged; `daemon start` in `--help`; override honored) and AGL-7 (payload-cwd worktree matrix); evidence comments on AGL-5 and AGL-7
 - [ ] T031 [AGL-11] Verify AGL-8 via a sandbox `$HOME` and AGL-6 via the dmatrix probes (`search_graph` on `%SupplementalContentPanel.vue` shows script symbols beyond Module+File; `trace_path("handleAddImage")` resolves; never via `check_index_coverage`); evidence comments on AGL-8 and AGL-6; confirm the second-machine install one-liner is documented on the cbm adoption project
