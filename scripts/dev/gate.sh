@@ -8,7 +8,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 case "${1:-basic}" in
   basic) scripts/build.sh ;;
-  full)  scripts/test.sh && scripts/lint.sh ;;
-  final) scripts/test.sh && scripts/lint.sh && make -f Makefile.cbm security ;;
+  full)  scripts/test.sh && scripts/lint.sh --ci && scripts/ci/lint-mem.sh ;;
+  final) scripts/test.sh && scripts/lint.sh --ci && scripts/ci/lint-mem.sh && make -f Makefile.cbm security ;;
   *) echo "usage: gate.sh [basic|full|final]" >&2; exit 2 ;;
 esac
