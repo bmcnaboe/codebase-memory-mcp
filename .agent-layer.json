@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "layer_repo": "https://github.com/bmcnaboe/agent-layer",
+  "layer_commit": "abcf57c0cd0c2e9ff6a7e9ebb393e4f9fe5c7b17",
+  "modules": [
+    "linear"
+  ],
+  "mirror": false,
+  "settings_managed": null,
+  "format_ignore": null,
+  "files": [
+    {
+      "path": ".claude/linear-workspace.md",
+      "module": "linear",
+      "source": "modules/linear/templates/linear-workspace.md",
+      "mode": "seeded"
+    },
+    {
+      "path": ".claude/skills/linear-accept/SKILL.md",
+      "module": "linear",
+      "source": "modules/linear/skills/linear-accept/SKILL.md",
+      "mode": "synced",
+      "sha256": "494f153d34816373506225541edac29b46b73bcffd0dbd202c975d55af2f5425"
+    },
+    {
+      "path": ".claude/skills/linear-fix/SKILL.md",
+      "module": "linear",
+      "source": "modules/linear/skills/linear-fix/SKILL.md",
+      "mode": "synced",
+      "sha256": "2c2ac48568dfbcf2dfddcccc7bbe169331f25026b2fae59df5069dde113dd2cf"
+    },
+    {
+      "path": ".claude/skills/linear-log/SKILL.md",
+      "module": "linear",
+      "source": "modules/linear/skills/linear-log/SKILL.md",
+      "mode": "synced",
+      "sha256": "306ad8ae04946c5647fcd76a5fcd5cca7f1779a9428ca1c57f1eb6e6a7543ec9"
+    },
+    {
+      "path": ".claude/skills/linear-plan/SKILL.md",
+      "module": "linear",
+      "source": "modules/linear/skills/linear-plan/SKILL.md",
+      "mode": "synced",
+      "sha256": "ed63a892fe7cf7db85dfc7ea7fabb546f1d19e1f93c3e26830a37d790daf674a"
+    },
+    {
+      "path": ".claude/skills/linear-verify-loop/SKILL.md",
+      "module": "linear",
+      "source": "modules/linear/skills/linear-verify-loop/SKILL.md",
+      "mode": "synced",
+      "sha256": "f6e5e10d7f3cd6c2d777ed1078a202938c7b3cf0f073dd5573f44e872efc2d86"
+    }
+  ]
+}
