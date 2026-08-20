@@ -1429,50 +1429,120 @@ static void embedded_collect_content_nodes(TSNode root, const CBMEmbeddedLangSpe
     }
 }
 
-static void parse_embedded_imports(CBMExtractCtx *ctx) {
+// Effective sub-language of one host <script> element: the spec default,
+// upgraded to TypeScript when a `lang`/`type` attribute on the element's
+// start_tag says so (Vue/Svelte `<script setup lang="ts">`, or an HTML
+// `type="text/typescript"`). script_el is the script_node_type node.
+static CBMLanguage embedded_script_language(CBMExtractCtx *ctx, TSNode script_el,
+                                            CBMLanguage fallback) {
+    CBMArena *a = ctx->arena;
+    uint32_t cc = ts_node_child_count(script_el);
+    for (uint32_t i = 0; i < cc; i++) {
+        TSNode child = ts_node_child(script_el, i);
+        if (strcmp(ts_node_type(child), "start_tag") != 0) {
+            continue;
+        }
+        uint32_t nc = ts_node_named_child_count(child);
+        for (uint32_t j = 0; j < nc; j++) {
+            TSNode attr = ts_node_named_child(child, j);
+            if (strcmp(ts_node_type(attr), "attribute") != 0) {
+                continue;
+            }
+            TSNode name = ts_node_named_child_count(attr) > 0 ? ts_node_named_child(attr, 0) : attr;
+            char *an = cbm_node_text(a, name, ctx->source);
+            if (!an || (strcmp(an, "lang") != 0 && strcmp(an, "type") != 0)) {
+                continue;
+            }
+            TSNode val = attr;
+            if (find_first_descendant_of(attr, "attribute_value", &val)) {
+                char *lv = cbm_node_text(a, val, ctx->source);
+                if (lv && (strcmp(lv, "ts") == 0 || strcmp(lv, "typescript") == 0 ||
+                           strcmp(lv, "text/typescript") == 0)) {
+                    return CBM_LANG_TYPESCRIPT;
+                }
+            }
+        }
+        break; /* one start_tag per script element */
+    }
+    return fallback;
+}
+
+// Re-parse each embedded <script> body and run the FULL extractor set over it —
+// definitions, imports, and unified (calls/usages) — so symbols declared in Vue
+// `<script setup>` / Svelte scripts become graph nodes with edges, not just the
+// SFC's Module + File. The block is parsed via ts_parser_set_included_ranges
+// over the ORIGINAL source, so every emitted node reports file coordinates with
+// no slice-offset bookkeeping; the sub-context keeps the host module_qn, so
+// fan-in / rename-impact list the referencing .vue/.svelte files. The embedded
+// grammar is the spec default (JavaScript), sniffed up to TypeScript per block.
+static void parse_embedded_scripts(CBMExtractCtx *ctx) {
     const CBMLangSpec *spec = cbm_lang_spec(ctx->language);
     if (!spec || !spec->embedded_imports) {
         return;
     }
+    /* Vue and Svelte SFCs get the full extractor set over their <script> blocks
+     * — this ticket's target. The other embedded-script hosts (HTML, Astro) keep
+     * the historical imports-only behaviour, so their results are unchanged. */
+    bool full_walk = (ctx->language == CBM_LANG_VUE || ctx->language == CBM_LANG_SVELTE);
     for (const CBMEmbeddedLangSpec *e = spec->embedded_imports; e->script_node_type != NULL; e++) {
-        const TSLanguage *embedded_lang = cbm_ts_language(e->embedded_language);
-        if (!embedded_lang) {
-            continue; /* embedded grammar not linked in — silently skip */
-        }
         enum { MAX_EMBEDDED_BLOCKS = 16 };
         TSNode hits[MAX_EMBEDDED_BLOCKS];
         int hit_count = 0;
         embedded_collect_content_nodes(ctx->root, e, hits, &hit_count, MAX_EMBEDDED_BLOCKS);
-        if (hit_count == 0) {
-            continue;
-        }
-        TSParser *parser = ts_parser_new();
-        if (!parser) {
-            continue;
-        }
-        if (!ts_parser_set_language(parser, embedded_lang)) {
-            ts_parser_delete(parser);
-            continue;
-        }
         for (int i = 0; i < hit_count; i++) {
             uint32_t s = ts_node_start_byte(hits[i]);
             uint32_t end = ts_node_end_byte(hits[i]);
             if (end <= s) {
                 continue;
             }
-            const char *sub_src = ctx->source + s;
-            uint32_t sub_len = end - s;
-            TSTree *sub_tree = ts_parser_parse_string(parser, NULL, sub_src, sub_len);
-            if (!sub_tree) {
+            CBMLanguage block_lang =
+                embedded_script_language(ctx, ts_node_parent(hits[i]), e->embedded_language);
+            const TSLanguage *grammar = cbm_ts_language(block_lang);
+            if (!grammar) {
+                continue; /* embedded grammar not linked in — silently skip */
+            }
+            TSParser *parser = ts_parser_new();
+            if (!parser) {
                 continue;
             }
-            CBMExtractCtx sub_ctx = *ctx;
-            sub_ctx.source = sub_src;
-            sub_ctx.root = ts_tree_root_node(sub_tree);
-            walk_es_imports(&sub_ctx, sub_ctx.root);
+            TSRange range = {
+                .start_point = ts_node_start_point(hits[i]),
+                .end_point = ts_node_end_point(hits[i]),
+                .start_byte = s,
+                .end_byte = end,
+            };
+            if (!ts_parser_set_language(parser, grammar) ||
+                !ts_parser_set_included_ranges(parser, &range, 1)) {
+                ts_parser_delete(parser);
+                continue;
+            }
+            TSTree *sub_tree =
+                ts_parser_parse_string(parser, NULL, ctx->source, (uint32_t)ctx->source_len);
+            if (!sub_tree) {
+                ts_parser_delete(parser);
+                continue;
+            }
+            CBMExtractCtx sub = {
+                .arena = ctx->arena,
+                .result = ctx->result,
+                .source = ctx->source,
+                .source_len = ctx->source_len,
+                .language = block_lang,
+                .project = ctx->project,
+                .rel_path = ctx->rel_path,
+                .module_qn = ctx->module_qn,
+                .root = ts_tree_root_node(sub_tree),
+            };
+            if (full_walk) {
+                cbm_extract_definitions(&sub);
+                cbm_extract_imports(&sub);
+                cbm_extract_unified(&sub);
+            } else {
+                walk_es_imports(&sub, sub.root);
+            }
             ts_tree_delete(sub_tree);
+            ts_parser_delete(parser);
         }
-        ts_parser_delete(parser);
     }
 }
 
@@ -2027,7 +2097,7 @@ static void parse_css_imports(CBMExtractCtx *ctx) {
 // files. tree-sitter-html exposes these as `start_tag` -> `attribute`
 // (attribute_name src/href) -> quoted_attribute_value -> attribute_value. DFS
 // for start_tags and emit one import per src/href value. (Embedded <script>
-// bodies are still handled separately by parse_embedded_imports.)
+// bodies are still handled separately by parse_embedded_scripts.)
 static void html_extract_tag_src(CBMExtractCtx *ctx, TSNode tag) {
     CBMArena *a = ctx->arena;
     uint32_t nc = ts_node_named_child_count(tag);
@@ -2054,8 +2124,8 @@ static void html_extract_tag_src(CBMExtractCtx *ctx, TSNode tag) {
 }
 
 static void parse_html_imports(CBMExtractCtx *ctx) {
-    /* First run the embedded-language walker (inline <script> JS imports). */
-    parse_embedded_imports(ctx);
+    /* First extract inline <script> symbols (defs / imports / calls / usages). */
+    parse_embedded_scripts(ctx);
 
     TSNodeStack stack;
     ts_nstack_init(&stack, ctx->arena, CBM_SZ_512);
@@ -2960,7 +3030,7 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
     case CBM_LANG_SVELTE:
     case CBM_LANG_VUE:
     case CBM_LANG_ASTRO:
-        parse_embedded_imports(ctx);
+        parse_embedded_scripts(ctx);
         break;
     default:
         // Grammar-only languages with no dedicated parser: consume the

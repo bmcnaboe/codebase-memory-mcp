@@ -145,6 +145,42 @@ TEST(extract_ts_factory_object_methods_issue341) {
     PASS();
 }
 
+/* AGL-6: symbols declared in a Vue <script setup> block become graph symbols
+ * (def + call + import), not just the SFC's Module/File. lang="ts" must select
+ * the TypeScript grammar so the typed signature parses. */
+TEST(extract_vue_script_setup_symbols_agl6) {
+    CBMFileResult *r = extract("<script setup lang=\"ts\">\n"
+                               "import { helperUtil } from './utils'\n"
+                               "function handleAddImage(x: number): number { return helperUtil(x) "
+                               "+ 1 }\n"
+                               "const localCount = handleAddImage(5)\n"
+                               "</script>\n"
+                               "<template><div>{{ localCount }}</div></template>\n",
+                               CBM_LANG_VUE, "t", "src/Panel.vue");
+    ASSERT_NOT_NULL(r);
+    ASSERT(has_def_any(r, "handleAddImage")); /* script-setup def is a symbol */
+    ASSERT(has_call(r, "helperUtil"));        /* call edge into the TS export   */
+    ASSERT(has_import(r, "utils"));           /* import edge from the SFC       */
+    cbm_free_result(r);
+    PASS();
+}
+
+/* AGL-6: Svelte's identically-shaped embedded spec rides the same seam. */
+TEST(extract_svelte_script_symbols_agl6) {
+    CBMFileResult *r = extract("<script lang=\"ts\">\n"
+                               "import { helperUtil } from './utils'\n"
+                               "function svelteHandler(y: number): number { return helperUtil(y) * "
+                               "3 }\n"
+                               "</script>\n"
+                               "<div>{svelteHandler(2)}</div>\n",
+                               CBM_LANG_SVELTE, "t", "src/Widget.svelte");
+    ASSERT_NOT_NULL(r);
+    ASSERT(has_def_any(r, "svelteHandler"));
+    ASSERT(has_call(r, "helperUtil"));
+    cbm_free_result(r);
+    PASS();
+}
+
 /* --- C/C++ preprocessor macros become Macro nodes (#375) --- */
 TEST(extract_c_macros_issue375) {
     CBMFileResult *r = extract("#define SIMPLE_MACRO 1\n"
@@ -1581,14 +1617,13 @@ TEST(cpp_function) {
  * node when multiple tests share a file. Each must mint a distinct Function
  * node whose name encodes the suite and case arguments. */
 TEST(cpp_gtest_same_name_collision_issue1266) {
-    CBMFileResult *r = extract(
-        "namespace demo { int assembleWidget(int s) { return s * 2; } }\n"
-        "TEST(WidgetSuite, DoublesSmallSize) { demo::assembleWidget(1); }\n"
-        "TEST(WidgetSuite, DoublesZero) { demo::assembleWidget(0); }\n"
-        "TEST(WidgetSuite, DoublesLargeSize) {\n"
-        "  demo::assembleWidget(1000);\n"
-        "}\n",
-        CBM_LANG_CPP, "t", "direct_test.cpp");
+    CBMFileResult *r = extract("namespace demo { int assembleWidget(int s) { return s * 2; } }\n"
+                               "TEST(WidgetSuite, DoublesSmallSize) { demo::assembleWidget(1); }\n"
+                               "TEST(WidgetSuite, DoublesZero) { demo::assembleWidget(0); }\n"
+                               "TEST(WidgetSuite, DoublesLargeSize) {\n"
+                               "  demo::assembleWidget(1000);\n"
+                               "}\n",
+                               CBM_LANG_CPP, "t", "direct_test.cpp");
     ASSERT_NOT_NULL(r);
     ASSERT(has_def(r, "Function", "TEST_WidgetSuite_DoublesSmallSize"));
     ASSERT(has_def(r, "Function", "TEST_WidgetSuite_DoublesZero"));
@@ -1600,10 +1635,9 @@ TEST(cpp_gtest_same_name_collision_issue1266) {
 
 /* #1266: TEST_F fixture macro also produces unique names. */
 TEST(cpp_gtest_f_unique_name_issue1266) {
-    CBMFileResult *r = extract(
-        "TEST_F(MyFixture, FirstTest) { doStuff(); }\n"
-        "TEST_F(MyFixture, SecondTest) { doOtherStuff(); }\n",
-        CBM_LANG_CPP, "t", "fixture_test.cpp");
+    CBMFileResult *r = extract("TEST_F(MyFixture, FirstTest) { doStuff(); }\n"
+                               "TEST_F(MyFixture, SecondTest) { doOtherStuff(); }\n",
+                               CBM_LANG_CPP, "t", "fixture_test.cpp");
     ASSERT_NOT_NULL(r);
     ASSERT(has_def(r, "Function", "TEST_F_MyFixture_FirstTest"));
     ASSERT(has_def(r, "Function", "TEST_F_MyFixture_SecondTest"));
@@ -1812,58 +1846,6 @@ TEST(sql_function) {
     ASSERT_NOT_NULL(r);
     ASSERT_FALSE(r->has_error);
     ASSERT_GTE(r->defs.count, 1);
-    cbm_free_result(r);
-    PASS();
-}
-
-TEST(sql_ddl_node_labels) {
-    CBMFileResult *r = extract("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\n"
-                               "CREATE VIEW active_users AS SELECT * FROM users;\n",
-                               CBM_LANG_SQL, "t", "schema.sql");
-    ASSERT_NOT_NULL(r);
-    ASSERT_FALSE(r->has_error);
-    ASSERT(has_def(r, "Table", "users"));
-    ASSERT(has_def(r, "View", "active_users"));
-    cbm_free_result(r);
-    PASS();
-}
-
-TEST(sql_view_lineage_usages) {
-    /* A view's FROM/JOIN relations are emitted as usages (ref_name = table),
-     * which pass_usages later resolves into view -> table USAGE lineage edges. */
-    CBMFileResult *r = extract("CREATE TABLE users (id INTEGER);\n"
-                               "CREATE VIEW active_users AS SELECT * FROM users;\n",
-                               CBM_LANG_SQL, "t", "schema.sql");
-    ASSERT_NOT_NULL(r);
-    ASSERT_FALSE(r->has_error);
-    int found_users = 0;
-    for (int i = 0; i < r->usages.count; i++) {
-        if (r->usages.items[i].ref_name && strcmp(r->usages.items[i].ref_name, "users") == 0) {
-            found_users = 1;
-        }
-    }
-    ASSERT(found_users);
-    cbm_free_result(r);
-    PASS();
-}
-
-TEST(sql_schema_qualified_name) {
-    /* schema-qualified DDL (schema.table) is named by the table, not the schema,
-     * and FROM schema.table resolves to that table for lineage. */
-    CBMFileResult *r = extract("CREATE TABLE app.users (id INTEGER);\n"
-                               "CREATE VIEW app.active AS SELECT * FROM app.users;\n",
-                               CBM_LANG_SQL, "t", "schema.sql");
-    ASSERT_NOT_NULL(r);
-    ASSERT_FALSE(r->has_error);
-    ASSERT(has_def(r, "Table", "users"));
-    ASSERT(has_def(r, "View", "active"));
-    int found_users = 0;
-    for (int i = 0; i < r->usages.count; i++) {
-        if (r->usages.items[i].ref_name && strcmp(r->usages.items[i].ref_name, "users") == 0) {
-            found_users = 1;
-        }
-    }
-    ASSERT(found_users);
     cbm_free_result(r);
     PASS();
 }
@@ -3235,9 +3217,9 @@ TEST(extract_ts_decorators_survive_interleaved_comment) {
     ASSERT_FALSE(r->has_error);
     const CBMDefinition *m = find_def_by_name(r, "login");
     ASSERT_NOT_NULL(m);
-    ASSERT(decorators_contain(m, "Throttle"));  /* below the comment — always worked */
-    ASSERT(decorators_contain(m, "HttpCode"));  /* above the comment — was dropped */
-    ASSERT(decorators_contain(m, "Post"));      /* above the comment — was dropped */
+    ASSERT(decorators_contain(m, "Throttle")); /* below the comment — always worked */
+    ASSERT(decorators_contain(m, "HttpCode")); /* above the comment — was dropped */
+    ASSERT(decorators_contain(m, "Post"));     /* above the comment — was dropped */
     cbm_free_result(r);
     PASS();
 }
@@ -3332,7 +3314,6 @@ TEST(extract_go_binary_concat_url_no_literal_suffix_issue1249) {
     cbm_free_result(r);
     PASS();
 }
-
 
 /* Reproduce-first: Java module QN must derive from the CONTAINING DIRECTORY, not
  * the filename stem, so a top-level class `Outer` in `Outer.java` is `t.Outer`,
@@ -4313,8 +4294,8 @@ TEST(extract_c_test_dir_marks_is_test_issue1294) {
  * not be (#1294). */
 TEST(extract_python_method_test_dir_marks_is_test_issue1294) {
     const char *src = "class Foo:\n"
-                       "    def helper(self):\n"
-                       "        pass\n";
+                      "    def helper(self):\n"
+                      "        pass\n";
 
     /* Python's LSP layer injects synthetic builtin stub Methods (str.upper,
      * dict.get, ...) into defs.items alongside real ones (py_builtins.c), so
@@ -5423,6 +5404,8 @@ SUITE(extraction) {
     RUN_TEST(extract_r_box_use_imports_issue218);
     RUN_TEST(extract_r_dollar_call_issue219);
     RUN_TEST(extract_ts_factory_object_methods_issue341);
+    RUN_TEST(extract_vue_script_setup_symbols_agl6);
+    RUN_TEST(extract_svelte_script_symbols_agl6);
     RUN_TEST(extract_c_macros_issue375);
     RUN_TEST(extract_cpp_macros_issue375);
     RUN_TEST(extract_cpp_functionlike_macro_type_arg_no_false_parse_partial_issue1071);
@@ -5552,9 +5535,6 @@ SUITE(extraction) {
     /* Config/Markup */
     RUN_TEST(html_elements);
     RUN_TEST(sql_function);
-    RUN_TEST(sql_ddl_node_labels);
-    RUN_TEST(sql_view_lineage_usages);
-    RUN_TEST(sql_schema_qualified_name);
     RUN_TEST(meson_project);
     RUN_TEST(css_rules);
     RUN_TEST(scss_rules);

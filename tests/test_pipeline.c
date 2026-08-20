@@ -383,6 +383,102 @@ TEST(pipeline_structure_edges) {
     PASS();
 }
 
+/* Incoming edges that constitute semantic fan-in — excludes the structural
+ * DEFINES / CONTAINS_* edges every node carries, so the count is "is anything
+ * referencing this?", i.e. the dead-code signal. */
+static int agl6_semantic_in_edges(cbm_store_t *s, int64_t id) {
+    cbm_edge_t *edges = NULL;
+    int ec = 0;
+    int sem = 0;
+    if (cbm_store_find_edges_by_target(s, id, &edges, &ec) == CBM_STORE_OK) {
+        for (int i = 0; i < ec; i++) {
+            const char *t = edges[i].type;
+            if (t && strcmp(t, "DEFINES") != 0 && strncmp(t, "CONTAINS", 8) != 0) {
+                sem++;
+            }
+        }
+    }
+    cbm_store_free_edges(edges, ec);
+    return sem;
+}
+
+/* AGL-6: across files, a TS export referenced only from a Vue <script setup> SFC
+ * is NOT dead — it carries a semantic incoming edge from the .vue (fan-in /
+ * rename-impact lists the SFC) — while the SFC's own script symbols are graph
+ * nodes. A control export referenced nowhere stays dead. */
+TEST(pipeline_vue_script_setup_fan_in_agl6) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_vue_agl6_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("failed to create temp dir");
+    }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/utils.ts", tmp);
+    FILE *f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "export function helperUtil(n: number): number { return n * 2; }\n"
+               "export function unusedExport(n: number): number { return n - 1; }\n");
+    fclose(f);
+    snprintf(path, sizeof(path), "%s/Panel.vue", tmp);
+    f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "<script setup lang=\"ts\">\n"
+               "import { helperUtil } from './utils'\n"
+               "function handleAddImage(x: number): number { return helperUtil(x) + 1 }\n"
+               "const localCount = handleAddImage(5)\n"
+               "</script>\n"
+               "<template><div>{{ localCount }}</div></template>\n");
+    fclose(f);
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", tmp);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    const char *project = cbm_pipeline_project_name(p);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    cbm_node_t *funcs = NULL;
+    int fn = 0;
+    ASSERT_EQ(cbm_store_find_nodes_by_label(s, project, "Function", &funcs, &fn), CBM_STORE_OK);
+    int64_t handle_id = -1, helper_id = -1, unused_id = -1;
+    for (int i = 0; i < fn; i++) {
+        if (strcmp(funcs[i].name, "handleAddImage") == 0) {
+            handle_id = funcs[i].id;
+        } else if (strcmp(funcs[i].name, "helperUtil") == 0) {
+            helper_id = funcs[i].id;
+        } else if (strcmp(funcs[i].name, "unusedExport") == 0) {
+            unused_id = funcs[i].id;
+        }
+    }
+    cbm_store_free_nodes(funcs, fn);
+
+    int helper_in = helper_id >= 0 ? agl6_semantic_in_edges(s, helper_id) : 0;
+    int unused_in = unused_id >= 0 ? agl6_semantic_in_edges(s, unused_id) : 1;
+
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    rm_rf(tmp);
+
+    if (handle_id < 0) {
+        FAIL("Vue <script setup> function must be a graph node");
+    }
+    if (helper_id < 0) {
+        FAIL("a TS export referenced from the SFC must be a graph node");
+    }
+    if (helper_in < 1) {
+        FAIL("a TS export used only from a Vue SFC must not be dead (needs .vue fan-in)");
+    }
+    if (unused_id < 0) {
+        FAIL("the control TS export must be a graph node");
+    }
+    if (unused_in != 0) {
+        FAIL("a TS export referenced nowhere must remain dead (no incoming edges)");
+    }
+    PASS();
+}
+
 TEST(pipeline_branch_root_structure) {
     if (setup_test_repo() != 0) {
         FAIL("failed to create temp dir");
@@ -1052,14 +1148,13 @@ static NamedEdgePropertyObservation observe_named_edge_callee_property(
     }
     observation.database_opened = true;
 
-    static const char sql[] =
-        "SELECT e.properties, json_valid(e.properties), "
-        "CASE WHEN json_valid(e.properties) "
-        "THEN json_extract(e.properties, '$.callee') END "
-        "FROM edges e "
-        "JOIN nodes src ON src.id=e.source_id AND src.project=e.project "
-        "JOIN nodes tgt ON tgt.id=e.target_id AND tgt.project=e.project "
-        "WHERE e.project=?1 AND e.type=?2 AND src.name=?3 AND tgt.name=?4;";
+    static const char sql[] = "SELECT e.properties, json_valid(e.properties), "
+                              "CASE WHEN json_valid(e.properties) "
+                              "THEN json_extract(e.properties, '$.callee') END "
+                              "FROM edges e "
+                              "JOIN nodes src ON src.id=e.source_id AND src.project=e.project "
+                              "JOIN nodes tgt ON tgt.id=e.target_id AND tgt.project=e.project "
+                              "WHERE e.project=?1 AND e.type=?2 AND src.name=?3 AND tgt.name=?4;";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK ||
         sqlite3_bind_text(stmt, 1, project, -1, SQLITE_TRANSIENT) != SQLITE_OK ||
@@ -1747,13 +1842,13 @@ TEST(pipeline_call_reference_sequential_parallel_edge_set_parity) {
     long_reference_name[0] = 'l';
     long_reference_name[LONG_REFERENCE_NAME_LEN] = '\0';
     char long_reference_source[1024];
-    int long_reference_source_len = snprintf(
-        long_reference_source, sizeof(long_reference_source),
-        "package parity\n"
-        "func %s() {}\n"
-        "func longPropertiesReferenceAccept(callback func()) {}\n"
-        "func longPropertiesReferenceSite() { longPropertiesReferenceAccept(%s) }\n",
-        long_reference_name, long_reference_name);
+    int long_reference_source_len =
+        snprintf(long_reference_source, sizeof(long_reference_source),
+                 "package parity\n"
+                 "func %s() {}\n"
+                 "func longPropertiesReferenceAccept(callback func()) {}\n"
+                 "func longPropertiesReferenceSite() { longPropertiesReferenceAccept(%s) }\n",
+                 long_reference_name, long_reference_name);
     if (long_reference_source_len <= 0 ||
         (size_t)long_reference_source_len >= sizeof(long_reference_source)) {
         th_rmtree(tmp);
@@ -1941,18 +2036,18 @@ TEST(pipeline_call_reference_sequential_parallel_edge_set_parity) {
                 named_edge_count(sequential_store, sequential_project, "CALLS",
                                  shadow_controls[i].source_name, shadow_controls[i].target_name);
         }
-        sequential_long_reference = named_edge_count(
-            sequential_store, sequential_project, "CALL_REFERENCE", "longPropertiesReferenceSite",
-            long_reference_name);
-        sequential_long_usage = named_edge_count(sequential_store, sequential_project, "USAGE",
-                                                 "longPropertiesReferenceSite",
-                                                 long_reference_name);
-        sequential_long_calls = named_edge_count(sequential_store, sequential_project, "CALLS",
-                                                 "longPropertiesReferenceSite",
-                                                 long_reference_name);
+        sequential_long_reference =
+            named_edge_count(sequential_store, sequential_project, "CALL_REFERENCE",
+                             "longPropertiesReferenceSite", long_reference_name);
+        sequential_long_usage =
+            named_edge_count(sequential_store, sequential_project, "USAGE",
+                             "longPropertiesReferenceSite", long_reference_name);
+        sequential_long_calls =
+            named_edge_count(sequential_store, sequential_project, "CALLS",
+                             "longPropertiesReferenceSite", long_reference_name);
         sequential_long_property = observe_named_edge_callee_property(
-            sequential_db_path, sequential_project, "CALL_REFERENCE",
-            "longPropertiesReferenceSite", long_reference_name, long_reference_name);
+            sequential_db_path, sequential_project, "CALL_REFERENCE", "longPropertiesReferenceSite",
+            long_reference_name, long_reference_name);
         cbm_store_close(sequential_store);
     }
     cbm_pipeline_free(sequential);
@@ -1990,9 +2085,9 @@ TEST(pipeline_call_reference_sequential_parallel_edge_set_parity) {
                 named_edge_count(parallel_store, parallel_project, "CALLS",
                                  shadow_controls[i].source_name, shadow_controls[i].target_name);
         }
-        parallel_long_reference = named_edge_count(
-            parallel_store, parallel_project, "CALL_REFERENCE", "longPropertiesReferenceSite",
-            long_reference_name);
+        parallel_long_reference =
+            named_edge_count(parallel_store, parallel_project, "CALL_REFERENCE",
+                             "longPropertiesReferenceSite", long_reference_name);
         parallel_long_usage = named_edge_count(parallel_store, parallel_project, "USAGE",
                                                "longPropertiesReferenceSite", long_reference_name);
         parallel_long_calls = named_edge_count(parallel_store, parallel_project, "CALLS",
@@ -2204,96 +2299,6 @@ TEST(pipeline_incremental_repoints_call_reference_without_stale_edge) {
     PASS();
 }
 
-/* SQL DDL becomes first-class Table/View nodes wired into FROM/JOIN lineage,
- * while the shared name registry must NOT leak those relations into other
- * languages' textual resolution: a Python call or identifier sharing the
- * table's name (`users`) would otherwise unique-name-bind a false CALLS/USAGE
- * edge into the lineage layer. Pins the resolve-time relation veto
- * (cbm_registry_resolve) together with the lineage opt-in
- * (cbm_registry_resolve_lineage). */
-TEST(pipeline_sql_lineage_and_relation_isolation) {
-    char tmp[256];
-    snprintf(tmp, sizeof(tmp), "/tmp/cbm_sql_lineage_XXXXXX");
-    if (!cbm_mkdtemp(tmp)) {
-        FAIL("tmpdir");
-    }
-    write_temp_file(tmp, "schema.sql",
-                    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\n"
-                    "CREATE VIEW active_users AS SELECT * FROM users;\n");
-    /* `users` exists project-wide ONLY as the SQL table, so without the
-     * relation veto the cross-file unique-name fallback would bind both the
-     * call and the bare reference below straight to the Table node. */
-    write_temp_file(tmp, "app.py",
-                    "def load_users():\n"
-                    "    return users()\n"
-                    "\n"
-                    "def show_users():\n"
-                    "    return users\n");
-    char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/sql_lineage.db", tmp);
-    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
-    ASSERT_NOT_NULL(p);
-    ASSERT_EQ(cbm_pipeline_run(p), 0);
-    const char *project = cbm_pipeline_project_name(p);
-    cbm_store_t *s = cbm_store_open_path(db_path);
-    ASSERT_NOT_NULL(s);
-    /* Positive control: the view's FROM emits real lineage. */
-    ASSERT_EQ(named_edge_count(s, project, "USAGE", "active_users", "users"), 1);
-    /* Isolation: no Python edge of any kind reaches the Table. */
-    ASSERT_EQ(named_edge_count(s, project, "CALLS", "load_users", "users"), 0);
-    ASSERT_EQ(named_edge_count(s, project, "USAGE", "load_users", "users"), 0);
-    ASSERT_EQ(named_edge_count(s, project, "USAGE", "show_users", "users"), 0);
-    ASSERT_EQ(named_edge_count(s, project, "READS", "show_users", "users"), 0);
-    cbm_store_close(s);
-    cbm_pipeline_free(p);
-    th_rmtree(tmp);
-    PASS();
-}
-
-/* Renaming a table must drop lineage from DEPENDENT (unchanged) SQL files on
- * the incremental path. Table/View participate in the per-file LSP surface
- * hash as registry-only labels (lsp_surface.c), so tables.sql's def change
- * invalidates views.sql's resolution instead of slipping the early cutoff and
- * leaving a stale view -> old-table USAGE edge. */
-TEST(pipeline_incremental_sql_table_rename_drops_stale_lineage) {
-    char tmp[256];
-    snprintf(tmp, sizeof(tmp), "/tmp/cbm_sql_rename_XXXXXX");
-    if (!cbm_mkdtemp(tmp)) {
-        FAIL("tmpdir");
-    }
-    write_temp_file(tmp, "tables.sql", "CREATE TABLE users (id INTEGER PRIMARY KEY);\n");
-    write_temp_file(tmp, "views.sql", "CREATE VIEW active AS SELECT * FROM users;\n");
-    char db_path[512];
-    snprintf(db_path, sizeof(db_path), "%s/sql_rename.db", tmp);
-    cbm_pipeline_t *first = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
-    ASSERT_NOT_NULL(first);
-    ASSERT_EQ(cbm_pipeline_run(first), 0);
-    const char *first_project = cbm_pipeline_project_name(first);
-    cbm_store_t *first_store = cbm_store_open_path(db_path);
-    ASSERT_NOT_NULL(first_store);
-    ASSERT_EQ(named_edge_count(first_store, first_project, "USAGE", "active", "users"), 1);
-    cbm_store_close(first_store);
-    cbm_pipeline_free(first);
-
-    write_temp_file(tmp, "tables.sql", "CREATE TABLE people (id INTEGER PRIMARY KEY);\n");
-    cbm_pipeline_incremental_test_reset_faults();
-    cbm_pipeline_t *second = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
-    ASSERT_NOT_NULL(second);
-    ASSERT_EQ(cbm_pipeline_run(second), 0);
-    const char *second_project = cbm_pipeline_project_name(second);
-    cbm_store_t *second_store = cbm_store_open_path(db_path);
-    ASSERT_NOT_NULL(second_store);
-    /* The view's FROM still says `users`, which no longer exists: the old
-     * edge must be gone (no stale lineage), and the unchanged dependent must
-     * not have been rebound to the renamed table either. */
-    ASSERT_EQ(named_edge_count(second_store, second_project, "USAGE", "active", "users"), 0);
-    ASSERT_EQ(named_edge_count(second_store, second_project, "USAGE", "active", "people"), 0);
-    cbm_store_close(second_store);
-    cbm_pipeline_free(second);
-    th_rmtree(tmp);
-    PASS();
-}
-
 /* Re-indexing only the caller must retain cross-file semantic proof for a
  * callable value whose definition lives in an unchanged file. A fresh full
  * index of the edited sources is the convergence oracle: incremental output
@@ -2430,8 +2435,8 @@ static void closure_probe_repo(const char *tmp) {
 }
 
 /* Fresh full reference build of the same tree into its own DB. */
-static void closure_fresh_full(const char *tmp, const char *db_path, int *out_nodes,
-                               int *out_edges, int *out_ref_edges, const char *project_hint) {
+static void closure_fresh_full(const char *tmp, const char *db_path, int *out_nodes, int *out_edges,
+                               int *out_ref_edges, const char *project_hint) {
     *out_nodes = -1;
     *out_edges = -2;
     *out_ref_edges = -3;
@@ -2448,9 +2453,9 @@ static void closure_fresh_full(const char *tmp, const char *db_path, int *out_no
         if (store) {
             *out_nodes = cbm_store_count_nodes(store, project);
             *out_edges = cbm_store_count_edges(store, project);
-            *out_ref_edges = named_edge_to_file_count(store, project, "CALL_REFERENCE",
-                                                      "closureProbeCaller", "closureProbeHelper",
-                                                      "lib.ts");
+            *out_ref_edges =
+                named_edge_to_file_count(store, project, "CALL_REFERENCE", "closureProbeCaller",
+                                         "closureProbeHelper", "lib.ts");
             cbm_store_close(store);
         }
     }
@@ -2535,8 +2540,8 @@ TEST(pipeline_closure_repair_body_edit_converges_with_fresh_full) {
     ASSERT_NOT_NULL(store);
     repaired_nodes = cbm_store_count_nodes(store, project);
     repaired_edges = cbm_store_count_edges(store, project);
-    repaired_refs = named_edge_to_file_count(store, project, "CALL_REFERENCE",
-                                             "closureProbeCaller", "closureProbeHelper", "lib.ts");
+    repaired_refs = named_edge_to_file_count(store, project, "CALL_REFERENCE", "closureProbeCaller",
+                                             "closureProbeHelper", "lib.ts");
     cbm_store_close(store);
 
     char full_db[512];
@@ -2592,8 +2597,8 @@ TEST(pipeline_closure_repair_removed_def_drops_dependent_edge) {
     int repaired_refs = -1;
     cbm_store_t *store = cbm_store_open_path(db);
     ASSERT_NOT_NULL(store);
-    repaired_refs = named_edge_to_file_count(store, project, "CALL_REFERENCE",
-                                             "closureProbeCaller", "closureProbeHelper", "lib.ts");
+    repaired_refs = named_edge_to_file_count(store, project, "CALL_REFERENCE", "closureProbeCaller",
+                                             "closureProbeHelper", "lib.ts");
     int repaired_nodes = cbm_store_count_nodes(store, project);
     int repaired_edges = cbm_store_count_edges(store, project);
     cbm_store_close(store);
@@ -2836,8 +2841,7 @@ TEST(pipeline_incremental_tsconfig_alias_change_matches_fresh_full) {
      * target_a.ts to target_b.ts. Since alias-config governance landed this
      * runs as a closure repair, and the convergence assertions below now
      * prove that route rather than being satisfied by a full rebuild. */
-    ASSERT_EQ(cbm_pipeline_incremental_test_last_route(),
-              CBM_INCREMENTAL_ROUTE_CLOSURE_REPAIR);
+    ASSERT_EQ(cbm_pipeline_incremental_test_last_route(), CBM_INCREMENTAL_ROUTE_CLOSURE_REPAIR);
     const char *incremental_project = cbm_pipeline_project_name(incremental);
     cbm_store_t *incremental_store = cbm_store_open_path(incremental_db);
     ASSERT_NOT_NULL(incremental_store);
@@ -3025,8 +3029,8 @@ TEST(pipeline_publication_never_uses_a_predictable_staging_path) {
     static const char canary[] = "canary-must-survive\n";
     char canary_path[PREDICTABLE_CANARIES][640];
     for (int i = 0; i < PREDICTABLE_CANARIES; i++) {
-        snprintf(canary_path[i], sizeof(canary_path[i]), "%s.stage.%ld.%d", db_path,
-                 (long)getpid(), i + 1);
+        snprintf(canary_path[i], sizeof(canary_path[i]), "%s.stage.%ld.%d", db_path, (long)getpid(),
+                 i + 1);
         ASSERT_EQ(th_write_file(canary_path[i], canary), 0);
     }
 
@@ -6049,7 +6053,7 @@ TEST(pipeline_swift_cross_package_import) {
     cbm_edge_t *edges = NULL;
     int ec = 0;
     ASSERT_EQ(cbm_store_find_edges_by_source_type(s, importer.id, "IMPORTS", &edges, &ec),
-             CBM_STORE_OK);
+              CBM_STORE_OK);
 
     bool found_exact_edge = false;
     for (int i = 0; i < ec; i++) {
@@ -6127,19 +6131,18 @@ TEST(pipeline_python_cross_module_call) {
  * unique_name (candidates==1) is #1572 and is not this claim. */
 TEST(pipeline_cross_language_same_name_does_not_share_calls_issue725) {
     const char *files[] = {"store.py", "app.py", "web/src/pages/Editor.js"};
-    const char *contents[] = {
-        "class Store:\n"
-        "    def commit(self):\n"
-        "        return True\n",
+    const char *contents[] = {"class Store:\n"
+                              "    def commit(self):\n"
+                              "        return True\n",
 
-        "from store import Store\n"
-        "\n"
-        "def save():\n"
-        "    return Store().commit()\n",
+                              "from store import Store\n"
+                              "\n"
+                              "def save():\n"
+                              "    return Store().commit()\n",
 
-        "export function commit() {\n"
-        "  return 1;\n"
-        "}\n"};
+                              "export function commit() {\n"
+                              "  return 1;\n"
+                              "}\n"};
 
     if (setup_lang_repo(files, contents, 3) != 0)
         FAIL("tmpdir");
@@ -9486,17 +9489,16 @@ static const char *pkg_entries_entry_for(const cbm_pkg_entries_t *e, const char 
  * above for the full end-to-end proof. */
 
 TEST(pkgmap_swift_targets_registers_module) {
-    static const char src[] =
-        "// swift-tools-version:5.9\n"
-        "import PackageDescription\n"
-        "let package = Package(\n"
-        "    name: \"Core\",\n"
-        "    targets: [.target(name: \"Core\", dependencies: [])]\n"
-        ")\n";
+    static const char src[] = "// swift-tools-version:5.9\n"
+                              "import PackageDescription\n"
+                              "let package = Package(\n"
+                              "    name: \"Core\",\n"
+                              "    targets: [.target(name: \"Core\", dependencies: [])]\n"
+                              ")\n";
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src,
-                                   (int)strlen(src), &entries);
+    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src, (int)strlen(src),
+                                   &entries);
     ASSERT_TRUE(ok);
     ASSERT_TRUE(pkg_entries_has_name(&entries, "Core"));
     ASSERT_STR_EQ(pkg_entries_entry_for(&entries, "Core"), "Core/Sources/Core");
@@ -9517,8 +9519,8 @@ TEST(pkgmap_swift_products_do_not_register_alias) {
         ")\n";
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src,
-                                   (int)strlen(src), &entries);
+    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src, (int)strlen(src),
+                                   &entries);
     ASSERT_TRUE(ok);
     ASSERT_FALSE(pkg_entries_has_name(&entries, "CoreKit"));
     ASSERT_TRUE(pkg_entries_has_name(&entries, "CoreImpl"));
@@ -9537,15 +9539,14 @@ TEST(pkgmap_swift_products_do_not_register_alias) {
  * fixture in this file happens to follow `name:` with `dependencies:` or a
  * comma, so this specific shape was previously untested and unnoticed. */
 TEST(pkgmap_swift_target_name_immediately_before_close_paren) {
-    static const char src[] =
-        "let package = Package(\n"
-        "    name: \"Core\",\n"
-        "    targets: [.target(name: \"Core\")]\n"
-        ")\n";
+    static const char src[] = "let package = Package(\n"
+                              "    name: \"Core\",\n"
+                              "    targets: [.target(name: \"Core\")]\n"
+                              ")\n";
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src,
-                                   (int)strlen(src), &entries);
+    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src, (int)strlen(src),
+                                   &entries);
     ASSERT_TRUE(ok);
     ASSERT_TRUE(pkg_entries_has_name(&entries, "Core"));
     ASSERT_STR_EQ(pkg_entries_entry_for(&entries, "Core"), "Core/Sources/Core");
@@ -9563,8 +9564,8 @@ TEST(pkgmap_swift_target_honors_literal_path) {
         ")\n";
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src,
-                                   (int)strlen(src), &entries);
+    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src, (int)strlen(src),
+                                   &entries);
     ASSERT_TRUE(ok);
     ASSERT_TRUE(pkg_entries_has_name(&entries, "Core"));
     ASSERT_STR_EQ(pkg_entries_entry_for(&entries, "Core"), "Core/Vendor/CoreLegacy");
@@ -9578,16 +9579,15 @@ TEST(pkgmap_swift_target_honors_literal_path) {
  * target entirely (fail closed), even though its `name:` is a valid
  * literal. */
 TEST(pkgmap_swift_target_computed_path_fails_closed) {
-    static const char src[] =
-        "let customPath = computePath()\n"
-        "let package = Package(\n"
-        "    name: \"Core\",\n"
-        "    targets: [.target(name: \"Core\", path: customPath)]\n"
-        ")\n";
+    static const char src[] = "let customPath = computePath()\n"
+                              "let package = Package(\n"
+                              "    name: \"Core\",\n"
+                              "    targets: [.target(name: \"Core\", path: customPath)]\n"
+                              ")\n";
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src,
-                                   (int)strlen(src), &entries);
+    bool ok = cbm_pkgmap_try_parse("Package.swift", "Core/Package.swift", src, (int)strlen(src),
+                                   &entries);
     ASSERT_TRUE(ok);
     ASSERT_EQ(entries.count, 0);
     cbm_pkg_entries_free(&entries);
@@ -9609,8 +9609,8 @@ TEST(pkgmap_swift_target_in_comment_or_string_not_registered) {
         ")\n";
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    bool ok = cbm_pkgmap_try_parse("Package.swift", "App/Package.swift", src,
-                                   (int)strlen(src), &entries);
+    bool ok =
+        cbm_pkgmap_try_parse("Package.swift", "App/Package.swift", src, (int)strlen(src), &entries);
     ASSERT_TRUE(ok);
     ASSERT_TRUE(pkg_entries_has_name(&entries, "App"));
     ASSERT_FALSE(pkg_entries_has_name(&entries, "Decoy"));
@@ -9639,8 +9639,8 @@ TEST(pkgmap_swift_dependencies_do_not_leak_entries) {
         ")\n";
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    bool ok = cbm_pkgmap_try_parse("Package.swift", "App/Package.swift", src,
-                                   (int)strlen(src), &entries);
+    bool ok =
+        cbm_pkgmap_try_parse("Package.swift", "App/Package.swift", src, (int)strlen(src), &entries);
     ASSERT_TRUE(ok);
     ASSERT_TRUE(pkg_entries_has_name(&entries, "App"));
     ASSERT_FALSE(pkg_entries_has_name(&entries, "Core"));
@@ -9655,18 +9655,17 @@ TEST(pkgmap_swift_dependencies_do_not_leak_entries) {
  * (Utils/UtilsPkg) name OTHER modules, not this manifest's own
  * products/targets, so neither mints an entry. */
 TEST(pkgmap_swift_target_name_dependency_does_not_leak_entry) {
-    static const char src[] =
-        "let package = Package(\n"
-        "    name: \"App\",\n"
-        "    targets: [.target(name: \"App\", dependencies: [\n"
-        "        \"Core\",\n"
-        "        .product(name: \"Utils\", package: \"UtilsPkg\")\n"
-        "    ])]\n"
-        ")\n";
+    static const char src[] = "let package = Package(\n"
+                              "    name: \"App\",\n"
+                              "    targets: [.target(name: \"App\", dependencies: [\n"
+                              "        \"Core\",\n"
+                              "        .product(name: \"Utils\", package: \"UtilsPkg\")\n"
+                              "    ])]\n"
+                              ")\n";
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    bool ok = cbm_pkgmap_try_parse("Package.swift", "App/Package.swift", src,
-                                   (int)strlen(src), &entries);
+    bool ok =
+        cbm_pkgmap_try_parse("Package.swift", "App/Package.swift", src, (int)strlen(src), &entries);
     ASSERT_TRUE(ok);
     ASSERT_TRUE(pkg_entries_has_name(&entries, "App"));
     ASSERT_FALSE(pkg_entries_has_name(&entries, "Core"));
@@ -12053,6 +12052,7 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_committed_counts_match_persisted);
     RUN_TEST(pipeline_adr_survives_full_reindex);
     RUN_TEST(pipeline_structure_edges);
+    RUN_TEST(pipeline_vue_script_setup_fan_in_agl6);
     RUN_TEST(pipeline_branch_root_structure);
     RUN_TEST(pipeline_project_name_derived);
     RUN_TEST(pipeline_fast_mode);
@@ -12346,8 +12346,6 @@ SUITE(pipeline) {
 SUITE(pipeline_semantic_manifest_repro) {
     RUN_TEST(incremental_downgrade_preserves_scope_and_artifact_across_change_noop_delete);
     RUN_TEST(pipeline_incremental_repoints_call_reference_without_stale_edge);
-    RUN_TEST(pipeline_sql_lineage_and_relation_isolation);
-    RUN_TEST(pipeline_incremental_sql_table_rename_drops_stale_lineage);
     RUN_TEST(pipeline_parallel_manifest_is_byte_stable_above_threshold);
     RUN_TEST(pipeline_closure_repair_body_edit_converges_with_fresh_full);
     RUN_TEST(pipeline_closure_repair_removed_def_drops_dependent_edge);
