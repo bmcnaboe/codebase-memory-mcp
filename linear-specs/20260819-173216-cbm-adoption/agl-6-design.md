@@ -92,11 +92,15 @@ Because `sub.module_qn` is the `.vue` module QN, the script's symbols are
 qualified under the SFC's module, so fan-in / rename-impact naturally list the
 `.vue` file.
 
-The generalized routine replaces the imports-only `parse_embedded_imports`. It
-runs as a single embedded pass invoked from the file driver
-(`cbm_extract_file_ex`) after the primary passes; the current call inside
-`cbm_extract_imports` is removed so embedded scripts are walked exactly once by
-the full set (imports included).
+The generalized routine (`parse_embedded_scripts`) replaces the imports-only
+`parse_embedded_imports` **in place**, keeping its existing wiring: it is still
+invoked from the host import handlers (`parse_html_imports` for HTML, and the
+`VUE`/`SVELTE`/`ASTRO` case of `cbm_extract_imports`), now running the full
+walker set instead of just `walk_es_imports`. Each host file reaches it exactly
+once, so embedded scripts are walked once by the full set (imports included).
+The JS/TS sub-context has no `embedded_imports` of its own, so
+`cbm_extract_imports(&sub)` does not recurse. A parser is created per block (the
+sniffed language can differ per `<script>`).
 
 ### 3. Sniff `lang="ts"`
 
