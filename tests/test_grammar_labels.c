@@ -186,7 +186,7 @@ static const LabelGolden LABEL_GOLDENS[] = {
     {"toml", "Class:1,Module:1,Variable:1"},
     {"ini", "Class:1,Module:1,Variable:1"},
     {"csv", "Module:1"},
-    {"sql", "Module:1,Table:1"},
+    {"sql", "Module:1,Variable:1"},
     {"xml", "Class:2,Module:1"},
     {"html", "Module:1"},
     {"css", "Module:1"},
@@ -233,7 +233,10 @@ static const LabelGolden LABEL_GOLDENS[] = {
     {"liquid", "Module:1"},
     {"blade", "Module:1"},
     {"vue", "Module:1"},
-    {"svelte", "Module:1"},
+    /* AGL-6: Svelte <script> symbols are now indexed (the SFC Module plus the
+     * embedded script's own module node + its declarations). Vue's fixture is
+     * template-only so it stays Module:1; HTML/Astro keep imports-only. */
+    {"svelte", "Module:2,Variable:1"},
     {"astro", "Module:1"},
     {"templ", "Class:1,Module:1"},
     {"typst", "Module:1"},
