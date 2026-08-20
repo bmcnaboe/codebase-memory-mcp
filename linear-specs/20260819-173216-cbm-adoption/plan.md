@@ -119,7 +119,7 @@ before any code tranche.
 
 ### Tranche D — install.sh --clients (AGL-8)
 
-- [ ] T021 [AGL-8] Claim: move AGL-8 to In Progress, assignee me, start comment
+- [x] T021 [AGL-8] Claim: move AGL-8 to In Progress, assignee me, start comment
 - [ ] T022 [AGL-8] install.sh: honor `--clients=…` (pass through to the binary installer), error on unrecognized flags, keep `--skip-config` unchanged; exercise only via a sandbox `$HOME`
 - [ ] T023 [risky] Close tranche D: final gate green (the security audit's install-audit layer covers install.sh); move AGL-8 to In Review with a summary comment
 
