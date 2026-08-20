@@ -8200,6 +8200,76 @@ TEST(cli_hook_worktree_cwd_resolves_own_indexed_project) {
         FAIL("main-checkout resolution must be unchanged and not leak the worktree project");
     PASS();
 }
+
+/* Completes the payload-cwd matrix (with the indexed-worktree test above and the
+ * deadline/logging contract in cli_hook_augment_deadline_breadcrumb_issue858): a
+ * linked worktree that was never indexed must yield a deliberate, non-empty "no
+ * project matched — run index_repository" notice, never a silent 0-byte reply
+ * that an agent cannot distinguish from "no matches". */
+TEST(cli_hook_unindexed_worktree_reports_no_match_not_silent) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-unindexed-wt-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+    char cache[512];
+    char maindir[512];
+    char wtdir[512];
+    snprintf(cache, sizeof(cache), "%s/cache", tmpdir);
+    snprintf(maindir, sizeof(maindir), "%s/checkout-main", tmpdir);
+    snprintf(wtdir, sizeof(wtdir), "%s/checkout-side", tmpdir);
+    test_mkdirp(cache);
+    test_mkdirp(maindir);
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+             "cd \"%s\" && git init -q && git config user.email t@t && git config user.name t && "
+             ": > f.txt && git add f.txt && git commit -qm init && "
+             "git worktree add -q \"%s\" -b agl7unindexed",
+             maindir, wtdir);
+    if (system(cmd) != 0) {
+        test_rmdir_r(tmpdir);
+        FAIL("git worktree setup failed");
+    }
+
+    /* Index ONLY the main checkout; the worktree is deliberately left out. */
+    char *main_name = cbm_project_name_from_path(maindir);
+    ASSERT_NOT_NULL(main_name);
+    char db_main[900];
+    snprintf(db_main, sizeof(db_main), "%s/%s.db", cache, main_name);
+    cbm_store_t *sm = cbm_store_open_path(db_main);
+    ASSERT_NOT_NULL(sm);
+    ASSERT_EQ(cbm_store_upsert_project(sm, main_name, maindir), CBM_STORE_OK);
+    cbm_store_close(sm);
+
+    char *saved_cache = save_test_env("CBM_CACHE_DIR");
+    cbm_setenv("CBM_CACHE_DIR", cache, 1);
+
+    char input[1024];
+    snprintf(input, sizeof(input), "{\"hook_event_name\":\"SessionStart\",\"cwd\":\"%s\"}", wtdir);
+    char *wt_out = cbm_hook_augment_lifecycle_json(input);
+    bool deliberate = wt_out && wt_out[0] && strstr(wt_out, "no indexed graph project matched") &&
+                      !strstr(wt_out, "is indexed");
+    free(wt_out);
+
+    snprintf(input, sizeof(input), "{\"hook_event_name\":\"SessionStart\",\"cwd\":\"%s\"}",
+             maindir);
+    char *main_out = cbm_hook_augment_lifecycle_json(input);
+    bool main_ok = main_out && strstr(main_out, main_name) && strstr(main_out, "is indexed");
+    free(main_out);
+
+    restore_test_env("CBM_CACHE_DIR", saved_cache);
+    free(main_name);
+    snprintf(cmd, sizeof(cmd), "cd \"%s\" && git worktree remove --force \"%s\" >/dev/null 2>&1",
+             maindir, wtdir);
+    (void)system(cmd);
+    test_rmdir_r(tmpdir);
+
+    if (!deliberate)
+        FAIL("unindexed worktree must get a deliberate no-match notice, never a silent 0 bytes");
+    if (!main_ok)
+        FAIL("the indexed main checkout must still resolve in the same matrix");
+    PASS();
+}
 #endif
 
 TEST(cli_hook_session_sanitizes_untrusted_project_metadata) {
@@ -13308,6 +13378,7 @@ SUITE(cli) {
     RUN_TEST(cli_hook_session_resolves_custom_named_index_by_root_path);
 #ifndef _WIN32
     RUN_TEST(cli_hook_worktree_cwd_resolves_own_indexed_project);
+    RUN_TEST(cli_hook_unindexed_worktree_reports_no_match_not_silent);
 #endif
     RUN_TEST(cli_hook_session_sanitizes_untrusted_project_metadata);
     RUN_TEST(cli_hook_ownership_requires_exact_command_identity);
