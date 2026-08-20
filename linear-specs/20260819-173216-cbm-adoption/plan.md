@@ -100,7 +100,7 @@ before any code tranche.
 
 ### Tranche B — hook-augment: deadline + worktree (AGL-5, AGL-7)
 
-- [ ] T008 [AGL-5, AGL-7] Claim tranche: move AGL-5 and AGL-7 to In Progress, assignee me, one-line start comment each
+- [x] T008 [AGL-5, AGL-7] Claim tranche: move AGL-5 and AGL-7 to In Progress, assignee me, one-line start comment each
 - [ ] T009 [AGL-5] Fingerprint cache keyed (path, inode, mtime, size) at `runtime_process_image_reference_acquire` (src/daemon/runtime.c), covering both the self-fingerprint and the per-peer rendezvous checks; unit tests for hit/miss/key-roll
 - [ ] T010 [AGL-5] Apple hardware hash: `#ifdef __APPLE__` → CommonCrypto `CC_SHA256` in src/foundation/sha256.c; test asserts bit-identical output vs the scalar path
 - [ ] T011 [AGL-5] Deadline-miss observability in hook-augment: a missed deadline writes the timeouts log and a stderr line — never silent 0 bytes / exit 0; `CBM_HOOK_DEADLINE_MS` override still honored; document `daemon start` in `--help`
