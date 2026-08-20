@@ -125,7 +125,7 @@ before any code tranche.
 
 ### Tranche E — Publication (AGL-10)
 
-- [ ] T024 [AGL-10] Claim: move AGL-10 to In Progress, assignee me, start comment
+- [x] T024 [AGL-10] Claim: move AGL-10 to In Progress, assignee me, start comment
 - [ ] T025 [AGL-10] For each of AGL-5, AGL-7, AGL-8: collect that ticket's commits (`git log --grep AGL-N`), cherry-pick them onto a clean `fix/<slug>` branch off `upstream/main`, confirm the branch is upstream/main + only that ticket's commits and carries no `.claude/`, `.ralph/`, `linear-specs/`, `scripts/dev/`, `.agent-layer.json`, or `.mcp.json` paths, push to origin, open a **draft** PR (conventional title, body ends with `Fixes #N` — #1335 for AGL-5; AGL-9's new issues for AGL-7/AGL-8); record each PR URL on its ticket
 - [ ] T026 [AGL-10] Create AGL-6's clean branch the same way (no PR — design approval pending on #1410), then assemble fork `main`: `upstream/main` + merge of the four new fix branches + `codex/fix-precommit-git-environment` + `codex/fix-daemon-runtime-sanitizer-timeout-only`; `scripts/build.sh` green on the result; push `origin/main` (plain push, never force)
 - [ ] T027 [risky] Close tranche E: full gate green; move AGL-10 to In Review with a branch + PR summary
