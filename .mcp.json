@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "linear": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://mcp.linear.app/mcp"
+      ],
+      "env": {
+        "MCP_REMOTE_CONFIG_DIR": "${HOME}/.mcp-auth/linear-claude-codebase-memory-mcp"
+      }
+    }
+  }
+}
