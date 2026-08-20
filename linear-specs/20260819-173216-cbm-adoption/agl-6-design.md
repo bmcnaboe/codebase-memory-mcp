@@ -115,8 +115,11 @@ sets both the parser grammar and `sub.language`.
 
 `svelte_embedded_imports` has the identical `{script_element, raw_text, JS}`
 shape, so it rides the same generalized routine and the same `lang="ts"` sniff
-for free. HTML/Astro also share the shape; they are not AGL-6 targets but must
-keep working (regression-guarded by "non-Vue results unchanged").
+for free. HTML/Astro also share the shape, but they are **not** AGL-6 targets: to
+honor "non-Vue results unchanged," the full-walk is gated to Vue and Svelte
+(`full_walk = language ∈ {VUE, SVELTE}`), and HTML/Astro keep the historical
+imports-only behavior (`walk_es_imports` over the same included-ranges parse), so
+their extraction is byte-for-byte what it was.
 
 ## Out of scope
 

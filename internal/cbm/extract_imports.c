@@ -1480,6 +1480,10 @@ static void parse_embedded_scripts(CBMExtractCtx *ctx) {
     if (!spec || !spec->embedded_imports) {
         return;
     }
+    /* Vue and Svelte SFCs get the full extractor set over their <script> blocks
+     * — this ticket's target. The other embedded-script hosts (HTML, Astro) keep
+     * the historical imports-only behaviour, so their results are unchanged. */
+    bool full_walk = (ctx->language == CBM_LANG_VUE || ctx->language == CBM_LANG_SVELTE);
     for (const CBMEmbeddedLangSpec *e = spec->embedded_imports; e->script_node_type != NULL; e++) {
         enum { MAX_EMBEDDED_BLOCKS = 16 };
         TSNode hits[MAX_EMBEDDED_BLOCKS];
@@ -1529,9 +1533,13 @@ static void parse_embedded_scripts(CBMExtractCtx *ctx) {
                 .module_qn = ctx->module_qn,
                 .root = ts_tree_root_node(sub_tree),
             };
-            cbm_extract_definitions(&sub);
-            cbm_extract_imports(&sub);
-            cbm_extract_unified(&sub);
+            if (full_walk) {
+                cbm_extract_definitions(&sub);
+                cbm_extract_imports(&sub);
+                cbm_extract_unified(&sub);
+            } else {
+                walk_es_imports(&sub, sub.root);
+            }
             ts_tree_delete(sub_tree);
             ts_parser_delete(parser);
         }
