@@ -121,7 +121,7 @@ before any code tranche.
 
 - [x] T021 [AGL-8] Claim: move AGL-8 to In Progress, assignee me, start comment
 - [x] T022 [AGL-8] install.sh: honor `--clients=…` (pass through to the binary installer), error on unrecognized flags, keep `--skip-config` unchanged; exercise only via a sandbox `$HOME` — replaced the two lenient parse loops with one strict stateful parser (handles --dir/--dir=/--clients=/--skip-config/--help; errors exit 2 on any unknown flag); `--clients=$CLIENTS` passed through to `$DLBIN install` when not skipping config, so --skip-config is byte-identical. Verified: --help documents --clients, unknown flags → exit 2, bare --dir errors, shellcheck clean. End-to-end (exactly-two-clients) verified in T031 under a sandbox $HOME
-- [ ] T023 [risky] Close tranche D: final gate green (the security audit's install-audit layer covers install.sh); move AGL-8 to In Review with a summary comment
+- [x] T023 [risky] Close tranche D: final gate green (the security audit's install-audit layer covers install.sh); move AGL-8 to In Review with a summary comment — final gate green (exit 0, 1266s; all 8 security-audit layers incl. install-audit passed). First attempt hit a load-induced flake (subprocess_cancel_grace_is_hard_capped — passes in isolation 31/31, passed T020's full gate; recorded in .ralph/guardrails.md); the re-run was green. AGL-8 → In Review
 
 ### Tranche E — Publication (AGL-10)
 
