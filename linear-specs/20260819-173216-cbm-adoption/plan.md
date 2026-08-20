@@ -96,7 +96,7 @@ before any code tranche.
 - [x] T004 [AGL-9] File the upstream issue for AGL-8 (install.sh silently drops `--clients`): repro from AGL-8; note the binary's own installer honors the flag; record the URL on AGL-8 — filed https://github.com/DeusData/codebase-memory-mcp/issues/1753 (Linear record skipped, unavailable)
 - [x] T005 [AGL-9] Comment the root cause on #1335 per AGL-5's implementation notes (per-start SHA-256 of the ~295 MB executable; upstream's own `CBM_TEST_BUILD_FINGERPRINT` seam concedes it; measurements; explains the warm-daemon knife-edge; fingerprint-cache proposal; PR incoming); record the URL on AGL-5 — posted https://github.com/DeusData/codebase-memory-mcp/issues/1335#issuecomment-5350460267 (Linear record skipped, unavailable)
 - [x] T006 [AGL-9] Comment the proposed approach on #1410 per AGL-6's implementation notes (generalize the embedded-import seam to the full walker set via `ts_parser_set_included_ranges`, `lang="ts"` sniff, Svelte near-free); request design feedback per CONTRIBUTING; note we carry a fork patch meanwhile; record the URL on AGL-6 — posted https://github.com/DeusData/codebase-memory-mcp/issues/1410#issuecomment-5350461744 (Linear record skipped, unavailable)
-- [ ] T007 [risky] Close tranche A: full gate green; move AGL-9 to In Review with a summary comment listing every URL posted
+- [x] T007 [risky] Close tranche A: full gate green; move AGL-9 to In Review with a summary comment listing every URL posted — full gate green (exit 0, 1606s cold; ccache installed so the tier fits its wall-clock budget); AGL-9 → In Review with the four-URL summary comment
 
 ### Tranche B — hook-augment: deadline + worktree (AGL-5, AGL-7)
 
